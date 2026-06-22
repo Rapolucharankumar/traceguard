@@ -4,11 +4,12 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { CreditCard, Bell, User, Key, ExternalLink } from "lucide-react";
+import Link from "next/link";
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
@@ -22,10 +23,15 @@ export default function SettingsPage() {
     }, 1000);
   };
 
-  const handleStripePortal = () => {
-    toast.info("Connecting to Stripe Customer Portal...", {
-      description: "Mock integration. Requires live keys."
+  const handleManageBilling = () => {
+    // In a real Razorpay subscriptions implementation, this would open a customer portal.
+    // Since we are using Orders for 1-month passes, we direct them to pricing.
+    toast.info("Manage Billing", {
+      description: "You will be redirected to the pricing page to renew or upgrade your plan."
     });
+    setTimeout(() => {
+      window.location.href = "/pricing";
+    }, 1500);
   };
 
   return (
@@ -58,12 +64,12 @@ export default function SettingsPage() {
                 <p className="text-sm text-white/50">Your free trial is active. Upgrade to unlock AI deep analysis.</p>
               </div>
               <div className="flex items-center gap-3">
-                <Button variant="outline" className="bg-transparent border-white/10 hover:bg-white/5 text-white" onClick={handleStripePortal}>
+                <button type="button" className={buttonVariants({ variant: "outline", className: "bg-transparent border-white/10 hover:bg-white/5 text-white" })} onClick={handleManageBilling}>
                   Manage Billing <ExternalLink className="ml-2 h-3 w-3" />
-                </Button>
-                <Button className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-[0_0_15px_rgba(var(--primary),0.2)]">
+                </button>
+                <Link href="/pricing" className={buttonVariants({ className: "bg-primary hover:bg-primary/90 text-primary-foreground shadow-[0_0_15px_rgba(var(--primary),0.2)]" })}>
                   Upgrade to Pro
-                </Button>
+                </Link>
               </div>
             </div>
           </CardContent>
@@ -91,9 +97,9 @@ export default function SettingsPage() {
                   <p className="text-xs text-white/40">Email cannot be changed directly.</p>
                 </div>
               </div>
-              <Button type="submit" disabled={loading} className="bg-white/10 hover:bg-white/20 text-white">
+              <button type="submit" disabled={loading} className={buttonVariants({ className: "bg-white/10 hover:bg-white/20 text-white" })}>
                 {loading ? "Saving..." : "Save Changes"}
-              </Button>
+              </button>
             </form>
           </CardContent>
         </Card>
