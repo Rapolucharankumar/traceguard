@@ -1,215 +1,232 @@
 "use client";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { useEffect, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { BrainCircuit, Activity, Lock, Target, TrendingUp, Sparkles, Lightbulb } from "lucide-react";
-import { motion, Variants } from "framer-motion";
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, AreaChart, Area, CartesianGrid } from "recharts";
-
-const scoreData = [
-  { month: "Jan", professional: 65, privacy: 80 },
-  { month: "Feb", professional: 68, privacy: 82 },
-  { month: "Mar", professional: 72, privacy: 79 },
-  { month: "Apr", professional: 78, privacy: 85 },
-  { month: "May", professional: 82, privacy: 88 },
-  { month: "Jun", professional: 85, privacy: 90 },
-];
-
-const containerVariants: Variants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: { staggerChildren: 0.1 },
-  },
-};
-
-const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } },
-};
+import { Loader2, Sparkles, TrendingUp, ShieldAlert, BrainCircuit, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import { createClient } from "@/utils/supabase/client";
+import { generateAiReport } from "@/app/actions/analysis";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend
+} from "recharts";
 
 export default function AnalysisPage() {
+  const [reports, setReports] = useState<any[]>([]);
+  const [unreportedJobs, setUnreportedJobs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState<string | null>(null);
+  const supabase = createClient();
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // Fetch reports
+    const { data: reportsData } = await supabase
+      .from("scan_reports")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true });
+    
+    setReports(reportsData || []);
+
+    // Fetch completed jobs that don't have a report yet
+    const { data: jobsData } = await supabase
+      .from("scan_jobs")
+      .select("id, target_username, created_at")
+      .eq("user_id", user.id)
+      .eq("status", "completed")
+      .not("id", "in", `(${(reportsData || []).map(r => r.job_id).join(',') || '00000000-0000-0000-0000-000000000000'})`)
+      .order("created_at", { ascending: false });
+
+    setUnreportedJobs(jobsData || []);
+    setLoading(false);
+  };
+
+  const handleGenerate = async (jobId: string) => {
+    setGenerating(jobId);
+    toast.loading("Google Gemini is analyzing footprints...", { id: "ai-gen" });
+    try {
+      await generateAiReport(jobId);
+      toast.success("AI Analysis Complete!", { id: "ai-gen" });
+      await fetchData(); // refresh data
+    } catch (error: any) {
+      toast.error(error.message || "Analysis failed", { id: "ai-gen" });
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  // Format data for Recharts
+  const chartData = reports.map((r, i) => ({
+    name: `Scan ${i + 1}`,
+    professional: r.professional_score,
+    privacy: r.privacy_score,
+    readiness: r.recruiter_readiness_score
+  }));
+
+  const latestReport = reports.length > 0 ? reports[reports.length - 1] : null;
+
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+    <div className="flex flex-col gap-8 max-w-6xl mx-auto w-full pb-10">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">AI Analysis</h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <BrainCircuit className="h-8 w-8 text-primary" />
+            AI Intelligence Engine
+          </h1>
           <p className="text-muted-foreground mt-1">
-            Deep intelligence and synthesized insights from your digital footprint.
+            Historical progression and deep analysis powered by Google Gemini.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-white/5 border border-white/10 rounded-full px-3 py-1">
-          <Sparkles className="h-4 w-4 text-primary animate-pulse" />
-          <span>Last analyzed 2 hours ago</span>
-        </div>
+        <Button onClick={fetchData} variant="outline" size="icon" className="border-white/10 hover:bg-white/5">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+        </Button>
       </div>
 
-      <motion.div
-        variants={containerVariants}
-        initial="hidden"
-        animate="visible"
-        className="grid gap-6 md:grid-cols-3"
-      >
-        {/* Digital Identity Summary */}
-        <motion.div variants={itemVariants} className="md:col-span-3">
-          <Card className="bg-gradient-to-br from-primary/10 via-background/40 to-background/40 backdrop-blur-xl border-white/10 shadow-2xl overflow-hidden relative">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-primary/20 blur-[100px] rounded-full pointer-events-none" />
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <BrainCircuit className="h-5 w-5 text-primary" />
-                Digital Identity Synthesis
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-lg md:text-xl text-white/80 leading-relaxed font-light italic border-l-2 border-primary/50 pl-4 py-2">
-                "You appear to be a <span className="text-white font-medium">software developer</span> interested in <span className="text-white font-medium">AI and technology</span>. Your public footprint strongly signals expertise in frontend frameworks like React and Next.js, with a secondary focus on cloud architecture. Your persona is perceived as highly analytical and professionally driven."
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Professional Presence Score */}
-        <motion.div variants={itemVariants} className="md:col-span-1">
-          <Card className="h-full bg-background/40 backdrop-blur-md border-white/10 hover:border-white/20 transition-all flex flex-col">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-white/70">Professional Presence</CardTitle>
-                <Target className="h-4 w-4 text-blue-500" />
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col justify-between">
-              <div>
-                <div className="text-4xl font-bold text-white mb-2">85<span className="text-xl text-white/40">/100</span></div>
-                <Progress value={85} className="h-1.5 bg-white/5 [&>div]:bg-blue-500" />
-                <p className="text-xs text-white/50 mt-3">Top 12% in your industry</p>
-              </div>
-              <div className="mt-6 pt-4 border-t border-white/5">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">Key Contributors</h4>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 border-blue-500/20">GitHub Activity</Badge>
-                  <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 border-blue-500/20">LinkedIn SEO</Badge>
-                  <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 border-blue-500/20">Tech Blog</Badge>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Privacy Risk Score */}
-        <motion.div variants={itemVariants} className="md:col-span-1">
-          <Card className="h-full bg-background/40 backdrop-blur-md border-white/10 hover:border-white/20 transition-all flex flex-col">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-white/70">Privacy Protection</CardTitle>
-                <Lock className="h-4 w-4 text-emerald-500" />
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col justify-between">
-              <div>
-                <div className="text-4xl font-bold text-emerald-500 mb-2">90<span className="text-xl text-white/40">/100</span></div>
-                <Progress value={90} className="h-1.5 bg-white/5 [&>div]:bg-emerald-500" />
-                <p className="text-xs text-white/50 mt-3">Excellent security posture</p>
-              </div>
-              <div className="mt-6 pt-4 border-t border-white/5">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">Vulnerabilities</h4>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline" className="border-red-500/30 text-red-400">Old Email Exposed</Badge>
-                  <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">No breached passwords</Badge>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Timeline Chart */}
-        <motion.div variants={itemVariants} className="md:col-span-1">
-          <Card className="h-full bg-background/40 backdrop-blur-md border-white/10 hover:border-white/20 transition-all flex flex-col">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-white/70">6-Month Trajectory</CardTitle>
-                <TrendingUp className="h-4 w-4 text-primary" />
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 p-0 px-4 pb-4">
-              <div className="h-32 w-full mt-4">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={scoreData} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="colorProf" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#ffffff10" />
-                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#ffffff50' }} />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#ffffff50' }} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#000000dd', borderColor: '#ffffff20', borderRadius: '8px', fontSize: '12px' }}
-                      itemStyle={{ color: '#fff' }}
-                    />
-                    <Area type="monotone" dataKey="professional" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorProf)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* AI Actionable Insights */}
-        <motion.div variants={itemVariants} className="md:col-span-3">
-          <h3 className="text-xl font-semibold mb-4 text-white flex items-center gap-2">
-            <Lightbulb className="h-5 w-5 text-amber-400" />
-            AI-Generated Recommendations
-          </h3>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card className="bg-background/40 backdrop-blur-md border-white/10 group hover:border-primary/50 transition-colors">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-white group-hover:text-primary transition-colors">Enhance GitHub Readme</CardTitle>
+      {loading ? (
+        <div className="h-64 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      ) : (
+        <>
+          {/* Unreported Jobs Queue */}
+          {unreportedJobs.length > 0 && (
+            <Card className="bg-primary/5 border-primary/20">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-primary" />
+                  Ready for Analysis
+                </CardTitle>
+                <CardDescription>You have footprint scans that haven't been analyzed by AI yet.</CardDescription>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-white/60">
-                  Your most popular repository lacks a comprehensive README. Adding architecture diagrams and setup instructions typically increases recruiter engagement by 40%.
-                </p>
+              <CardContent className="space-y-3">
+                {unreportedJobs.map((job) => (
+                  <div key={job.id} className="flex items-center justify-between bg-white/5 p-3 rounded-md border border-white/10">
+                    <div>
+                      <div className="font-medium">Target: {job.target_username}</div>
+                      <div className="text-xs text-white/40">{new Date(job.created_at).toLocaleString()}</div>
+                    </div>
+                    <Button 
+                      onClick={() => handleGenerate(job.id)} 
+                      disabled={generating !== null}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                    >
+                      {generating === job.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BrainCircuit className="mr-2 h-4 w-4" />}
+                      Generate Insights
+                    </Button>
+                  </div>
+                ))}
               </CardContent>
             </Card>
+          )}
 
-            <Card className="bg-background/40 backdrop-blur-md border-white/10 group hover:border-primary/50 transition-colors">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-white group-hover:text-primary transition-colors">Consolidate Social Footprint</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-white/60">
-                  You have an inactive Twitter/X account from 2017 that dilutes your search presence. Consider deactivating it to funnel traffic towards your optimized LinkedIn profile.
-                </p>
-              </CardContent>
-            </Card>
+          {/* Historical Trends Chart */}
+          {reports.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2">
+                <Card className="bg-white/5 backdrop-blur-sm border border-white/10 h-full">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5 text-blue-400" />
+                      Historical Score Progression
+                    </CardTitle>
+                    <CardDescription>How your digital identity has evolved over time.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="h-[300px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                        <XAxis dataKey="name" stroke="rgba(255,255,255,0.5)" />
+                        <YAxis stroke="rgba(255,255,255,0.5)" domain={[0, 100]} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#050505', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '8px' }}
+                          itemStyle={{ color: '#fff' }}
+                        />
+                        <Legend />
+                        <Line type="monotone" name="Professional" dataKey="professional" stroke="#3b82f6" strokeWidth={3} activeDot={{ r: 8 }} />
+                        <Line type="monotone" name="Privacy Exposure" dataKey="privacy" stroke="#ef4444" strokeWidth={3} />
+                        <Line type="monotone" name="Recruiter Ready" dataKey="readiness" stroke="#10b981" strokeWidth={3} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </div>
 
-            <Card className="bg-background/40 backdrop-blur-md border-white/10 group hover:border-emerald-500/50 transition-colors">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-white group-hover:text-emerald-400 transition-colors">Remove Old Resume PDF</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-white/60">
-                  An old version of your resume containing your personal phone number is still indexed on a previous employer's public directory. We recommend sending a removal request.
-                </p>
-              </CardContent>
-            </Card>
-            
-            <Card className="bg-background/40 backdrop-blur-md border-white/10 group hover:border-blue-500/50 transition-colors">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-white group-hover:text-blue-400 transition-colors">Publish Technical Content</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-white/60">
-                  To achieve the next tier of Professional Presence score (90+), our models suggest publishing 1-2 articles on Medium or Dev.to focusing on Next.js optimization strategies.
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </motion.div>
+              {/* Latest Report Details */}
+              <div className="lg:col-span-1 space-y-6">
+                <Card className="bg-white/5 backdrop-blur-sm border border-white/10">
+                  <CardHeader>
+                    <CardTitle className="text-xl">Latest AI Summary</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-white/80 leading-relaxed">
+                      {latestReport?.identity_summary}
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 mt-6">
+                      <div className="text-center p-2 rounded bg-white/5 border border-white/5">
+                        <div className="text-2xl font-bold text-blue-400">{latestReport?.professional_score}</div>
+                        <div className="text-[10px] text-white/50 uppercase mt-1">Prof</div>
+                      </div>
+                      <div className="text-center p-2 rounded bg-white/5 border border-white/5">
+                        <div className="text-2xl font-bold text-red-400">{latestReport?.privacy_score}</div>
+                        <div className="text-[10px] text-white/50 uppercase mt-1">Exp</div>
+                      </div>
+                      <div className="text-center p-2 rounded bg-white/5 border border-white/5">
+                        <div className="text-2xl font-bold text-green-400">{latestReport?.recruiter_readiness_score}</div>
+                        <div className="text-[10px] text-white/50 uppercase mt-1">Ready</div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
 
-      </motion.div>
+                <Card className="bg-white/5 backdrop-blur-sm border border-white/10">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <ShieldAlert className="h-4 w-4 text-yellow-500" />
+                      Security Recommendations
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="space-y-3">
+                      {(latestReport?.actionable_insights || []).map((rec: string, i: number) => (
+                        <li key={i} className="text-sm text-white/70 flex gap-3 items-start">
+                          <span className="text-yellow-500 font-bold">•</span>
+                          {rec}
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {reports.length === 0 && unreportedJobs.length === 0 && (
+            <div className="text-center py-20 bg-white/5 border border-white/10 rounded-xl">
+              <BrainCircuit className="h-12 w-12 text-white/20 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">No Analysis Data</h3>
+              <p className="text-white/50 max-w-md mx-auto">
+                Run a Footprint Discovery scan first. Once the scan completes, you can generate an AI intelligence report here.
+              </p>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

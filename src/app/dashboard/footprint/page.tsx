@@ -1,260 +1,229 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { motion } from "framer-motion";
+import { Search, Loader2, CheckCircle2, XCircle, AlertTriangle, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { createClient } from "@/utils/supabase/client";
 import { 
-  ScanSearch, 
-  RefreshCw, 
-  ExternalLink, 
-  ShieldAlert, 
-  CheckCircle2, 
-  Briefcase, 
-  Code, 
-  Camera, 
-  MessageSquare, 
-  Globe,
-  FileText,
-  Layers,
-  AlertTriangle,
-  Search
-} from "lucide-react";
+  createScanJob, 
+  completeScanJob, 
+  scanGithub, 
+  scanReddit, 
+  checkGenericProfile 
+} from "@/app/actions/discovery";
 
-type ScanState = "idle" | "scanning" | "results";
+type DiscoveryStatus = "found" | "not_found" | "error";
 
-const MOCK_RESULTS = [
-  { platform: "LinkedIn", username: "alexchen.dev", url: "linkedin.com/in/alexchen.dev", visibility: "Public", risk: "Low", status: "Monitored", icon: Briefcase, data: "Full resume, 500+ connections" },
-  { platform: "GitHub", username: "achen99", url: "github.com/achen99", visibility: "Public", risk: "Low", status: "Monitored", icon: Code, data: "64 public repositories, personal email exposed in commits" },
-  { platform: "Instagram", username: "alex.explores", url: "instagram.com/alex.explores", visibility: "Public", risk: "Medium", status: "Action Needed", icon: Camera, data: "Location tags enabled on 124 photos" },
-  { platform: "Twitter / X", username: "achen_dev", url: "twitter.com/achen_dev", visibility: "Public", risk: "Low", status: "Monitored", icon: MessageSquare, data: "Professional focus, 2.4k followers" },
-  { platform: "Reddit", username: "throwaway_ac99", url: "reddit.com/user/throwaway_ac99", visibility: "Anonymous", risk: "High", status: "Vulnerable", icon: Globe, data: "Comment history linked to secondary email" },
-  { platform: "Medium", username: "@alexchen", url: "medium.com/@alexchen", visibility: "Public", risk: "Low", status: "Monitored", icon: FileText, data: "12 published articles, email in bio" },
-  { platform: "Stack Overflow", username: "alex-c", url: "stackoverflow.com/users/44321/alex-c", visibility: "Public", risk: "Low", status: "Monitored", icon: Layers, data: "Top 5% in React, location visible" },
-];
+interface Discovery {
+  id: string;
+  platform: string;
+  username: string;
+  profile_url: string;
+  status: DiscoveryStatus;
+  severity: "low" | "medium" | "high";
+  raw_data: any;
+}
 
-const SCAN_STEPS = [
-  "Initializing deep web crawlers...",
-  "Querying major social networks...",
-  "Analyzing public developer platforms...",
-  "Searching paste sites and forums...",
-  "Cross-referencing leaked databases...",
-  "Compiling risk exposure profile...",
-  "Finalizing report..."
-];
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { staggerChildren: 0.1 } },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, scale: 0.95 },
+  visible: { opacity: 1, scale: 1 },
+};
 
 export default function FootprintPage() {
-  const [scanState, setScanState] = useState<ScanState>("idle");
-  const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [currentStep, setCurrentStep] = useState(0);
+  const [isScanning, setIsScanning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [discoveries, setDiscoveries] = useState<Discovery[]>([]);
+  const supabase = createClient();
 
   useEffect(() => {
-    if (scanState === "scanning") {
-      let currentProgress = 0;
-      const interval = setInterval(() => {
-        currentProgress += Math.random() * 5 + 2;
-        if (currentProgress > 100) currentProgress = 100;
-        setProgress(currentProgress);
-        
-        const stepIndex = Math.min(
-          Math.floor((currentProgress / 100) * SCAN_STEPS.length),
-          SCAN_STEPS.length - 1
-        );
-        setCurrentStep(stepIndex);
+    if (!jobId) return;
 
-        if (currentProgress >= 100) {
-          clearInterval(interval);
-          setTimeout(() => setScanState("results"), 800);
+    // Subscribe to real-time inserts on profile_discoveries for this specific job
+    const channel = supabase
+      .channel(`scan_job_${jobId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "profile_discoveries",
+          filter: `job_id=eq.${jobId}`,
+        },
+        (payload) => {
+          setDiscoveries((prev) => [...prev, payload.new as Discovery]);
         }
-      }, 300);
+      )
+      .subscribe();
 
-      return () => clearInterval(interval);
-    }
-  }, [scanState]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [jobId, supabase]);
 
-  const handleStartScan = (e: React.FormEvent) => {
+  const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email && !username) return;
-    setScanState("scanning");
-    setProgress(0);
-    setCurrentStep(0);
+    if (!username.trim()) return;
+
+    setIsScanning(true);
+    setDiscoveries([]);
+    setJobId(null);
+
+    try {
+      // 1. Create the Scan Job record in DB
+      const newJobId = await createScanJob(username);
+      setJobId(newJobId);
+
+      // 2. Client-Side Orchestrated Fan-Out
+      // We fire all Server Actions simultaneously without awaiting them sequentially.
+      // This bypasses Vercel's 10s timeout by keeping requests isolated.
+      await Promise.allSettled([
+        scanGithub(newJobId, username),
+        scanReddit(newJobId, username),
+        checkGenericProfile(newJobId, "Medium", `https://medium.com/@${username}`, username),
+        checkGenericProfile(newJobId, "Twitter", `https://twitter.com/${username}`, username),
+        checkGenericProfile(newJobId, "Dev.to", `https://dev.to/${username}`, username)
+      ]);
+
+      // 3. Complete the job
+      await completeScanJob(newJobId);
+      
+    } catch (error) {
+      console.error("Scan error:", error);
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl mx-auto w-full">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Footprint Scan</h1>
-          <p className="text-muted-foreground mt-1">
-            Discover what information about you is publicly visible online.
-          </p>
-        </div>
-        {scanState === "results" && (
-          <Button onClick={() => setScanState("idle")} variant="outline" className="gap-2 shrink-0 border-white/10 bg-white/5 hover:bg-white/10 text-white">
-            <RefreshCw className="h-4 w-4" />
-            New Scan
-          </Button>
-        )}
+    <div className="flex flex-col gap-8 max-w-5xl mx-auto w-full pb-10">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Footprint Discovery</h1>
+        <p className="text-muted-foreground mt-1">
+          Trace your username across the public internet using real OSINT endpoints.
+        </p>
       </div>
 
-      <AnimatePresence mode="wait">
-        {scanState === "idle" && (
-          <motion.div
-            key="idle"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.3 }}
-          >
-            <Card className="bg-background/40 backdrop-blur-xl border-white/10 shadow-2xl overflow-hidden relative">
-              <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent opacity-50" />
-              <CardHeader className="relative z-10 pb-4 border-b border-white/5">
-                <CardTitle className="text-xl flex items-center gap-2 text-white">
-                  <Search className="h-5 w-5 text-primary" />
-                  Initiate Deep Scan
-                </CardTitle>
-                <CardDescription className="text-white/50">
-                  Provide a seed email and username to begin the recursive discovery process.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="relative z-10 pt-6">
-                <form onSubmit={handleStartScan} className="space-y-6">
-                  <div className="grid gap-6 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="email" className="text-white/80">Primary Email</Label>
-                      <Input 
-                        id="email" 
-                        type="email" 
-                        placeholder="alex.chen@example.com" 
-                        required
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-primary/50"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="username" className="text-white/80">Common Username (Optional)</Label>
-                      <Input 
-                        id="username" 
-                        placeholder="@alexchen99" 
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-primary/50"
-                      />
-                    </div>
-                  </div>
-                  <Button type="submit" size="lg" className="w-full sm:w-auto px-8 gap-2 bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_20px_rgba(var(--primary),0.3)]">
-                    <ScanSearch className="h-5 w-5" />
-                    Start Footprint Scan
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-          </motion.div>
-        )}
-
-        {scanState === "scanning" && (
-          <motion.div
-            key="scanning"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.05 }}
-            transition={{ duration: 0.4 }}
-            className="flex flex-col items-center justify-center py-20"
-          >
-            <div className="relative mb-8">
-              <div className="absolute inset-0 bg-primary/20 blur-xl rounded-full animate-pulse" />
-              <div className="relative h-24 w-24 bg-black/50 border border-white/10 rounded-full flex items-center justify-center backdrop-blur-md">
-                <ScanSearch className="h-10 w-10 text-primary animate-[spin_3s_linear_infinite]" />
+      {/* Search Form */}
+      <Card className="bg-background/40 backdrop-blur-md border-white/10 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-[400px] h-[400px] bg-primary/5 blur-[100px] rounded-full pointer-events-none -translate-y-1/2 translate-x-1/2" />
+        <CardContent className="p-6 relative z-10">
+          <form onSubmit={handleScan} className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-white/40" />
+                <Input 
+                  placeholder="Enter username to trace (e.g., torvalds)" 
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="pl-9 bg-white/5 border-white/10 h-12 text-lg text-white placeholder:text-white/30"
+                  disabled={isScanning}
+                />
               </div>
             </div>
-            
-            <h3 className="text-2xl font-semibold mb-2 text-white">Analyzing Digital Footprint</h3>
-            
-            <div className="w-full max-w-md mt-6 space-y-4">
-              <div className="flex justify-between text-sm">
-                <span className="text-white/60 font-mono">{SCAN_STEPS[currentStep]}</span>
-                <span className="text-primary font-mono">{Math.floor(progress)}%</span>
-              </div>
-              <Progress value={progress} className="h-2 bg-white/5 [&>div]:bg-primary" />
-            </div>
-          </motion.div>
-        )}
+            <Button 
+              type="submit" 
+              disabled={isScanning || !username} 
+              className="h-12 px-8 bg-primary hover:bg-primary/90 text-primary-foreground shadow-[0_0_20px_rgba(var(--primary),0.3)] text-lg transition-all"
+            >
+              {isScanning ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Scanning...
+                </>
+              ) : (
+                "Start Trace"
+              )}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
-        {scanState === "results" && (
+      {/* Live Results Stream */}
+      {(jobId || discoveries.length > 0) && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between border-b border-white/10 pb-4">
+            <h2 className="text-xl font-semibold flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-primary" />
+              Live Feed
+            </h2>
+            {isScanning && (
+              <Badge variant="outline" className="border-primary/50 text-primary animate-pulse">
+                Workers Active...
+              </Badge>
+            )}
+          </div>
+
           <motion.div
-            key="results"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, staggerChildren: 0.1 }}
-            className="grid gap-4 md:grid-cols-2 lg:grid-cols-3"
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
           >
-            {MOCK_RESULTS.map((result, i) => (
-              <motion.div
-                key={result.platform}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: i * 0.1 }}
-              >
-                <Card className="h-full bg-background/40 backdrop-blur-md border-white/10 hover:border-white/20 transition-all shadow-xl hover:shadow-primary/5 flex flex-col group">
-                  <CardHeader className="pb-4">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/80 group-hover:bg-white/10 transition-colors">
-                          <result.icon className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <CardTitle className="text-base text-white">{result.platform}</CardTitle>
-                          <CardDescription className="text-white/50 text-xs mt-0.5">{result.url}</CardDescription>
-                        </div>
-                      </div>
-                      <Badge 
-                        variant="outline" 
-                        className={
-                          result.risk === "High" ? "border-red-500/50 text-red-400 bg-red-500/10" :
-                          result.risk === "Medium" ? "border-amber-500/50 text-amber-400 bg-amber-500/10" :
-                          "border-emerald-500/50 text-emerald-400 bg-emerald-500/10"
-                        }
-                      >
-                        {result.risk} Risk
-                      </Badge>
+            {discoveries.map((discovery) => (
+              <motion.div key={discovery.id} variants={itemVariants}>
+                <Card className={`bg-white/5 backdrop-blur-sm border border-white/5 overflow-hidden transition-all hover:bg-white/10 ${discovery.status === 'found' && discovery.severity === 'high' ? 'border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.1)]' : ''}`}>
+                  <CardContent className="p-5">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="font-bold text-lg text-white">{discovery.platform}</div>
+                      {discovery.status === "found" && <CheckCircle2 className="h-5 w-5 text-green-500" />}
+                      {discovery.status === "not_found" && <XCircle className="h-5 w-5 text-zinc-500" />}
+                      {discovery.status === "error" && <AlertTriangle className="h-5 w-5 text-yellow-500" />}
                     </div>
-                  </CardHeader>
-                  <CardContent className="flex-1 flex flex-col">
-                    <div className="mb-4 text-sm text-white/70 bg-white/5 rounded-lg p-3 border border-white/5">
-                      <span className="font-semibold text-white/90">Discovered Data: </span>
-                      {result.data}
-                    </div>
-                    
-                    <div className="mt-auto flex items-center justify-between pt-4 border-t border-white/5">
-                      <div className="flex items-center gap-1.5">
-                        {result.status === "Monitored" ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                        ) : result.risk === "High" ? (
-                          <ShieldAlert className="h-4 w-4 text-red-500" />
-                        ) : (
-                          <AlertTriangle className="h-4 w-4 text-amber-500" />
-                        )}
-                        <span className="text-xs font-medium text-white/60">{result.status}</span>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-white/50">Username</span>
+                        <span className="text-white font-medium">{discovery.username}</span>
                       </div>
-                      <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-white/50 hover:text-white">
-                        <span className="text-xs">View</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </Button>
+
+                      {discovery.status === "found" ? (
+                        <>
+                          {discovery.severity === "high" && (
+                            <Badge variant="destructive" className="mt-2 w-full justify-center">High Risk Data</Badge>
+                          )}
+                          <a 
+                            href={discovery.profile_url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="mt-4 block text-xs text-center py-2 rounded bg-white/5 hover:bg-white/10 text-white/70 transition-colors"
+                          >
+                            View Public Profile
+                          </a>
+                        </>
+                      ) : (
+                        <div className="mt-4 text-xs text-center py-2 text-white/40 italic">
+                          {discovery.status === "error" ? "Connection failed" : "No profile detected"}
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
               </motion.div>
             ))}
+
+            {isScanning && (
+              <motion.div variants={itemVariants}>
+                 <Card className="bg-white/5 backdrop-blur-sm border border-white/5 border-dashed flex items-center justify-center min-h-[160px]">
+                    <div className="flex flex-col items-center gap-2 text-white/40">
+                      <Loader2 className="h-6 w-6 animate-spin" />
+                      <span className="text-sm">Awaiting endpoints...</span>
+                    </div>
+                 </Card>
+              </motion.div>
+            )}
           </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }
